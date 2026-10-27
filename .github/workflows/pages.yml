@@ -1,0 +1,145 @@
+name: Build host and publish Payload Manager source
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish VERSION as an experimental GitHub release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: debian:13-slim
+    permissions:
+      contents: read
+      pages: read
+    outputs:
+      pages_status: ${{ steps.pages.outcome }}
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git make python3 gcc libc6-dev clang-19 llvm-19 lld-19
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build pinned PS5 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_source="$RUNNER_TEMP/elf2jb-sdk-source"
+          git init "$sdk_source"
+          git -C "$sdk_source" fetch --depth 1 https://github.com/ps5-payload-dev/sdk.git a7685ce8e97ce1f8a4f38253a41d54241c9124f1
+          git -C "$sdk_source" checkout --detach FETCH_HEAD
+          make -j2 -C "$sdk_source" DESTDIR="$RUNNER_TEMP/elf2jb-sdk" install
+      - name: Build and validate host
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j2 PS5_PAYLOAD_SDK="$RUNNER_TEMP/elf2jb-sdk" all test runtime-test browser-test catalog-test pages-test
+      - name: Prepare GitHub Pages
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+      - name: Generate source and downloads
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url || 'https://cpypwn.github.io/elf2jb' }}
+        run: python3 scripts/build-pages.py --base-url "$PAGES_BASE_URL/"
+      - name: Package release downloads
+        run: python3 scripts/package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elf2jb-release
+          if-no-files-found: error
+          path: |
+            build/elf2jb-host.elf
+            build/elf2jb-open-browser.elf
+            build/elf2jb-v*.zip
+            build/elf2jb-v*.zip.sha256
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.pages.outcome == 'success'
+        with:
+          path: build/pages
+
+  deploy:
+    if: needs.build.outputs.pages_status == 'success'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish source
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: elf2jb-release
+          path: build/release
+      - name: Verify release downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cat VERSION)"
+          cd build/release
+          sha256sum --check "elf2jb-v$version.zip.sha256"
+          unzip -p "elf2jb-v$version.zip" SHA256SUMS > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish experimental release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGES_STATUS: ${{ needs.build.outputs.pages_status }}
+        run: |
+          set -euo pipefail
+          version="$(cat VERSION)"
+          tag="v$version"
+          notes="$RUNNER_TEMP/elf2jb-release-notes.md"
+          cp RELEASE_NOTES.md "$notes"
+          if [ "$PAGES_STATUS" != success ]; then
+            cat >> "$notes" <<'EOF'
+
+          The Payload Manager Pages source is not live yet. Enable GitHub Pages
+          with GitHub Actions as its source, then rerun the deployment workflow.
+          EOF
+          fi
+          if gh release view "$tag" --json isDraft --jq .isDraft > "$RUNNER_TEMP/elf2jb-release-draft"; then
+            test "$(cat "$RUNNER_TEMP/elf2jb-release-draft")" = true || {
+              echo 'This version is already published; bump VERSION before releasing again.'
+              exit 1
+            }
+          else
+            gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" \
+              --title "elf2jb $tag (experimental)" --notes-file "$notes"
+          fi
+          gh release upload "$tag" --clobber \
+            build/release/elf2jb-host.elf build/release/elf2jb-open-browser.elf \
+            "build/release/elf2jb-v$version.zip" "build/release/elf2jb-v$version.zip.sha256" \
+            build/release/SHA256SUMS
+          gh release edit "$tag" --draft=false --prerelease --target "$GITHUB_SHA" \
+            --title "elf2jb $tag (experimental)" --notes-file "$notes"

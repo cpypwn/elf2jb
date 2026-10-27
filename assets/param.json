@@ -1,0 +1,9 @@
+{
+  "titleId": "ELFJ00001",
+  "applicationCategoryType": 65536,
+  "deeplinkUri": "http://127.0.0.1:8088/",
+  "localizedParameters": {
+    "defaultLanguage": "en-US",
+    "en-US": { "titleName": "elf2jb Host" }
+  }
+}

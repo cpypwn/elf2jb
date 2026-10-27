@@ -1,0 +1,34 @@
+name: refresh release docs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-docs
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: refresh documentation and source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(cat VERSION)"
+          tag="v$version"
+          gh release download "$tag" --pattern '*.elf' --pattern SHA256SUMS --dir build
+          (cd build && sha256sum --check SHA256SUMS)
+          python3 scripts/build-pages.py
+          python3 scripts/package.py
+          gh release upload "$tag" --clobber \
+            "build/elf2jb-v$version.zip" "build/elf2jb-v$version.zip.sha256"
+          gh release edit "$tag" --target "$GITHUB_SHA" \
+            --title "elf2jb $tag (experimental)" --notes-file RELEASE_NOTES.md
