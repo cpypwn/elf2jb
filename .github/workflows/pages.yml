@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: Publish VERSION as an experimental GitHub release
+        description: Publish VERSION as a GitHub release
         type: boolean
         default: false
 
@@ -30,7 +30,7 @@ jobs:
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates git make python3 gcc libc6-dev clang-19 llvm-19 lld-19
+          apt-get install -y --no-install-recommends ca-certificates git make python3 gcc libc6-dev clang-19 llvm-19 lld-19 nodejs
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -110,7 +110,7 @@ jobs:
           sha256sum --check "elf2jb-v$version.zip.sha256"
           unzip -p "elf2jb-v$version.zip" SHA256SUMS > SHA256SUMS
           sha256sum --check SHA256SUMS
-      - name: Publish experimental release
+      - name: Publish release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -135,11 +135,11 @@ jobs:
             }
           else
             gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" \
-              --title "elf2jb $tag (experimental)" --notes-file "$notes"
+              --title "elf2jb $tag" --notes-file "$notes"
           fi
           gh release upload "$tag" --clobber \
             build/release/elf2jb-host.elf build/release/elf2jb-open-browser.elf \
             "build/release/elf2jb-v$version.zip" "build/release/elf2jb-v$version.zip.sha256" \
             build/release/SHA256SUMS
           gh release edit "$tag" --draft=false --prerelease --target "$GITHUB_SHA" \
-            --title "elf2jb $tag (experimental)" --notes-file "$notes"
+            --title "elf2jb $tag" --notes-file "$notes"

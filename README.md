@@ -13,7 +13,7 @@ console testing has passed step 2/4. a complete run and the GPU greeting still n
 
 this source bundles [Cellenseres/ns2jb](https://github.com/Cellenseres/ns2jb). if a run stops, open `http://your-ps5-ip:8088/status` and save the `diagnostics` entry; it includes the FS acquisition error from the run folder.
 
-[download](https://github.com/cpypwn/elf2jb/releases/tag/v0.1.5) · [switch 2 setup](https://github.com/Cellenseres/ns2jb)
+[download](https://github.com/cpypwn/elf2jb/releases/tag/v0.1.6) · [switch 2 setup](https://github.com/Cellenseres/ns2jb)
 
 payload manager source:
 `https://cpypwn.github.io/elf2jb/payloads.json`
