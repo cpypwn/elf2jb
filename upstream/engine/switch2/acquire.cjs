@@ -12,6 +12,9 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function start() {
   // This is flaky right now, so run 3x for now
   const MAX_ATTEMPTS = 3;
+  // Allow reservation tuning between acquisition attempts.
+  const baseObjects = Number(process.env.NS2_GAP_OBJECTS ?? 59);
+  const objectStep = Number(process.env.NS2_GAP_OBJECT_STEP ?? 0);
   let lastError;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; ++attempt) {
     const logFile = path.join(__dirname, 'acquisition.log');
@@ -25,7 +28,8 @@ async function start() {
     const log = fs.createWriteStream(logFile, { flags: 'wx', mode: 0o600 });
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
     const child = spawn(process.execPath, [path.join(__dirname, 'memory/probe-reserved-gap.cjs')],
-      { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+        env: {...process.env, NS2_GAP_OBJECTS: String(baseObjects + attempt * objectStep)} });
     child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false });
     let reportFile, exited, spawnError;
     child.once('error', error => { spawnError = error; });
@@ -91,7 +95,15 @@ async function start() {
           return { cleanedUp: true, report: reportFile };
         },
       };
-    } catch (error) { await abandon(); lastError = error; }
+    } catch (error) {
+      await abandon();
+      // Stop retries when resources or cache state remain uncertain.
+      let final = null;
+      if (reportFile) { try { final = await read(reportFile); } catch {} }
+      if (final && (final.cleanedUp === false || final.placementUncertain || final.cleanupError ||
+        (Array.isArray(final.cases) && final.cases.length > 10))) throw error;
+      lastError = error;
+    }
     if (attempt < MAX_ATTEMPTS - 1) await delay(1000);
   }
   throw lastError;

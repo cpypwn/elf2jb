@@ -1,0 +1,15 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x=1) in;
+#include "state.glsl"
+void main() {
+    uint buttons = c.raw[0].z;
+    uint pressed = buttons & ~c.state.y;
+    if ((c.raw[2].x & 1u) != 0u && (pressed & (2u | 2048u)) != 0u) {
+        c.reserved.z = 1u;
+    }
+    c.motion.x += 1.0 / 60.0;
+    c.state.y = buttons;
+    c.state.z += 1u;
+    c.transition.x = max(0.0, c.transition.x - 1.0 / 15.0);
+}

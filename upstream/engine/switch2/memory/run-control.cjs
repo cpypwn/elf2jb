@@ -1,6 +1,9 @@
 // Track the one acquisition run. Stop at a checkpoint, then finish restoration.
 const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const {EventEmitter} = require('node:events');
+const {writeFileAtomic} = require('../../lib/atomic-write.cjs');
 
 class StopRequested extends Error {
   constructor() {super('Run stopped at a checkpoint'); this.name = 'StopRequested';}
@@ -18,7 +21,7 @@ class RunControl {
     };
   }
   async start() {
-    this.state.directory = await fs.mkdtemp('/tmp/ns2-');
+    this.state.directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ns2-'));
     await fs.chmod(this.state.directory, 0o700);
     this.started = true;
     process.on('SIGINT', this.stopSignal);
@@ -54,9 +57,7 @@ function reportWriter(file, snapshot) {
   return () => {
     const bytes = JSON.stringify(snapshot(), (_, v) => typeof v === 'bigint' ? v.toString() : v, 2) + '\n';
     queue = queue.catch(() => {}).then(async () => {
-      const temporary = file + '.' + process.pid + '.tmp';
-      await fs.writeFile(temporary, bytes, {mode: 0o600});
-      await fs.rename(temporary, file);
+      await writeFileAtomic(file, bytes);
     });
     return queue;
   };

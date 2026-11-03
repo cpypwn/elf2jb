@@ -32,10 +32,10 @@ def read_exact(connection, count):
         result.extend(data)
     return result
 
-def control(method, body=b''):
+def control(method, body=b'', endpoint='/restart'):
     connection = http.client.HTTPConnection('127.0.0.1', 8088, timeout=3)
     try:
-        connection.request(method, '/restart', body, {'Content-Type':'application/x-www-form-urlencoded'})
+        connection.request(method, endpoint, body, {'Content-Type':'application/x-www-form-urlencoded'})
         response = connection.getresponse()
         response.read()
         return response.status, response.getheader('Location')
@@ -65,7 +65,7 @@ def wait_for_failure(attempt):
         assert time.monotonic() < deadline, report
         time.sleep(0.02)
 
-with tempfile.TemporaryDirectory(prefix='elf2jb-host-') as directory:
+with tempfile.TemporaryDirectory(prefix='elf2jb-host-', dir=Path(tempfile.gettempdir()).resolve()) as directory:
     loader=socket.socket();loader.bind(('127.0.0.1',0));loader.listen();loader.settimeout(5)
     Path(directory,'config.json').write_text(json.dumps({'openBrowser':True,'loaderPort':loader.getsockname()[1]}))
     handoff={}
@@ -78,7 +78,8 @@ with tempfile.TemporaryDirectory(prefix='elf2jb-host-') as directory:
                 content=bytearray()
                 while chunk:=connection.recv(65536):content.extend(chunk)
                 handoff['bytes']=bytes(content)
-            Path(directory,'browser-launch.json').write_text(json.dumps({'state':'launch-accepted','systemError':0,'monotonicMs':time.monotonic()*1000}))
+            started = status()['browser']['startedAtMs']
+            Path(directory,'browser-launch.json').write_text(json.dumps({'state':'launch-accepted','systemError':0,'monotonicMs':started+1}))
         except Exception as error:handoff['error']=str(error)
     browser_thread=threading.Thread(target=accept_browser_helper,daemon=True);browser_thread.start()
     process = subprocess.Popen([str(project/'build/elf2jb-host'), directory], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -101,11 +102,12 @@ with tempfile.TemporaryDirectory(prefix='elf2jb-host-') as directory:
         assert f'V=START(39380,{host.replace(".", ",")})'.encode() in page
         assert b'<title>elf2jb by cpypwn</title><h1>elf2jb by cpypwn</h1>' in page
         assert b'<img' not in page and b'Restart host</button>' not in page
+        assert b'Experimental port.' not in page
         assert report['attempt'] == 1 and report['canRestart'] is False
         assert control('GET')[0] == 405
         assert control('POST', b'attempt=1')[0] == 409, 'active runs must not restart'
-        assert report['mediaShortcut']['titleId'] == 'ELFJ00001'
-        assert report['mediaShortcut']['state'] == 'unavailable-on-native-host'
+        assert control('GET', endpoint='/finish')[0] == 405
+        assert control('POST', b'attempt=1', endpoint='/finish')[0] == 409, 'RPC cannot finish before verification'
         with opener.open('http://127.0.0.1:8088/icon.png', timeout=2) as response:
             assert response.headers['Content-Type'] == 'image/png'
             assert response.read() == (project/'assets/payload-icon.png').read_bytes()

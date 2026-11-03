@@ -1,8 +1,8 @@
 # Source provenance
 
 The host engine in `upstream/` is retained unchanged from
-https://gitlab.com/kurumuz/ns2jb at
-`efcc2ca263606bc795d62da332505903ea158b5c`.
+https://github.com/Cellenseres/ns2jb at
+`2f686045ff88e5a97f959d19752e00ef3b62011f`.
 Its original README and payload hash manifest are included.
 
 `vendor/quickjs/` contains the QuickJS interpreter from

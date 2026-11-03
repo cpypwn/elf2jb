@@ -1,0 +1,20 @@
+GPUBrewLauncher — CREDITS
+=========================
+
+Fork
+  NiftyNova
+  Created and maintains this fork, including the GPUBrewLauncher branding,
+  controller and pointer changes, session cleanup, and user documentation.
+
+Original project
+  RavensClawX
+  Created HBLauncher, the homebrew launcher and GPU app environment that this
+  fork is based on.
+
+Additional changes
+  fuyuka / touhoufagyuri
+  Rosalie
+  Miscellaneous changes and improvements.
+
+Thank you to everyone who tested, reported issues, or contributed code and
+documentation.

@@ -6,10 +6,58 @@ const {check} = require("../memory/session.cjs");
 const source = require('node:fs').readFileSync(__filename);
 const sha256 = crypto.createHash('sha256').update(source).digest('hex');
 
+// Validate buffer bounds and overlaps before writing.
+function planIpcBuffers(request, session) {
+  const {base, bytes} = session;
+  check(Number.isSafeInteger(base) && base > 0 && Number.isSafeInteger(bytes) && bytes > 0 &&
+    Number.isSafeInteger(base + bytes), 'IPC requires a verified scratch allocation');
+  const receiveSize = request.receive === undefined ? 0 :
+    Number(typeof request.receive === 'object' && request.receive !== null ? request.receive.size : request.receive);
+  const receiveMode = request.receive && typeof request.receive === 'object' &&
+    request.receive.mode !== undefined ? Number(request.receive.mode) : 1;
+  check(Number.isInteger(receiveSize) && receiveSize >= 0 && receiveSize <= 0x400000,
+    'IPC receive size must be 0..4 MiB');
+  check([0, 1, 3].includes(receiveMode), 'IPC receive mode must be 0, 1 or 3');
+  check(!receiveSize || (receiveSize <= 524288 && 0x4000 + receiveSize <= bytes),
+    'IPC receive buffer exceeds the owned scratch/read limit');
+  check(request.sendHexes === undefined || Array.isArray(request.sendHexes), 'sendHexes must be an array');
+  check(request.sendHexes === undefined || request.sendHex === undefined,
+    'Specify sendHexes or sendHex, not both');
+  check(request.sendHex === undefined || typeof request.sendHex === 'string', 'sendHex must be a string');
+  const hexes = request.sendHexes === undefined ?
+    (request.sendHex ? [request.sendHex] : []) : request.sendHexes;
+  check(hexes.length <= 15, 'IPC supports at most 15 send descriptors');
+  const sendMode = request.sendMode === undefined ? 1 : Number(request.sendMode);
+  check([0, 1, 3].includes(sendMode), 'IPC send mode must be 0, 1 or 3');
+  const input = request.hex === undefined ? '' : request.hex;
+  check(typeof input === 'string' && /^(?:[0-9a-fA-F]{2})*$/.test(input) && input.length <= 384,
+    'IPC input must be at most 192 hex-encoded bytes');
+  const packetEnd = Math.ceil((8 + (hexes.length + (receiveSize ? 1 : 0)) * 12) / 16) * 16 + 16 + input.length / 2;
+  check(packetEnd <= 256, 'CMIF input and descriptors exceed packet capacity');
+  const align = n => Math.ceil(n / 16) * 16;
+  let sendAt = Math.max(0x8000, align(0x4000 + receiveSize));
+  const options = {}, writes = [];
+  const send = hexes.map(hex => {
+    check(typeof hex === 'string' && /^(?:[0-9a-fA-F]{2})*$/.test(hex) && hex.length <= 0x400000 * 2,
+      'IPC send buffer must be valid hex, at most 4 MiB');
+    const size = hex.length / 2;
+    check(sendAt < bytes && size <= bytes - sendAt, 'IPC send buffers exceed the owned scratch allocation');
+    const address = base + sendAt;
+    if (size) writes.push({address, data: Buffer.from(hex, 'hex')});
+    // Preserve explicit zero-length descriptors, including their position.
+    sendAt += Math.max(16, align(size));
+    return {address, size, mode: sendMode};
+  });
+  if (send.length) options.send = send;
+  if (receiveSize) options.receive = [{address: base + 0x4000, size: receiveSize, mode: receiveMode}];
+  return {options, writes, receiveSize};
+}
+
 async function dispatch(context, request) {
   const {s, live, report, save} = context;
   const domain = require(path.join(__dirname, '../app/domain.cjs'));
   const state = report.nativeRo ||= {session: live.session, notifiers: [], events: [], calls: []};
+  state.clientCapabilities = {...state.clientCapabilities, ipcChildHandleClose: 1};
   if (!state.sources?.some(item => item.sha256 === sha256)) {
     const sourceFile = path.join(__dirname, 'control-' + sha256.slice(0, 12) + '.cjs');
     await fs.writeFile(sourceFile, source, {mode: 0o600});
@@ -145,10 +193,23 @@ async function dispatch(context, request) {
       'IPC requires a retained handle and valid command');
     check(typeof request.hex === 'string' && /^(?:[0-9a-fA-F]{2})*$/.test(request.hex) &&
       request.hex.length <= 384, 'IPC input must be at most 192 hex-encoded bytes');
-    const reply = await s.ipc('RO pivot: client command ' + id, handle, id, Buffer.from(request.hex, 'hex'));
+    const {options, writes, receiveSize} = planIpcBuffers(request, s);
+    if (receiveSize || options.send?.length) check(!s.threads.size, 'IPC buffers require an idle native worker');
+    for (const {address, data} of writes) await s.write(address, data);
+    const reply = await s.ipc('RO pivot: client command ' + id, handle, id, Buffer.from(request.hex, 'hex'), options);
     const entry = {at: new Date().toISOString(), operation: command, handle, id,
       result: reply.result, canonicalResult: reply.canonicalResult, copies: reply.copies,
       moves: reply.moves, hex: reply.data.toString('hex')};
+    if (receiveSize) entry.output = (await s.readOwned(s.base + 0x4000, receiveSize)).toString('hex');
+    for (const kind of ['copies', 'moves']) {
+      for (const child of reply[kind]) {
+        check(Number.isInteger(child) && child > 0 && child < 0xffff8000 && s.handles.has(child),
+          'IPC returned an invalid or unretained child handle');
+        const children = state.ipcChildren ||= [];
+        check(!children.some(item => item.handle === child), 'IPC child handle already tracked');
+        children.push({handle: child, parent: handle, id, kind, at: entry.at});
+      }
+    }
     state.calls.push(entry);
     await save();
     return entry;
@@ -191,12 +252,14 @@ async function dispatch(context, request) {
   }
   if (command === 'close-handle') {
     const handle = Number(request.handle);
-    check([...state.events, ...(state.domainCopies || []), ...(state.services || [])].some(item => item.handle === handle),
-      'Only exported or copied local handles may be closed here');
+    check([...state.events, ...(state.domainCopies || []), ...(state.services || []),
+      ...(state.ipcChildren || [])].some(item => item.handle === handle) && s.handles.has(handle),
+      'Only retained exported, copied, service or IPC-child handles may be closed here');
     await s.close(handle);
     state.events = state.events.filter(item => item.handle !== handle);
     if (state.domainCopies) state.domainCopies = state.domainCopies.filter(item => item.handle !== handle);
     if (state.services) state.services = state.services.filter(item => item.handle !== handle);
+    if (state.ipcChildren) state.ipcChildren = state.ipcChildren.filter(item => item.handle !== handle);
     await save();
     return {closed: handle};
   }
@@ -228,4 +291,4 @@ async function dispatch(context, request) {
   throw Error('Unknown native RO command: ' + command);
 }
 
-module.exports = {dispatch};
+module.exports = {dispatch, planIpcBuffers};

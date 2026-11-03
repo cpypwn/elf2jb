@@ -47,7 +47,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          make -j2 PS5_PAYLOAD_SDK="$RUNNER_TEMP/elf2jb-sdk" all test runtime-test browser-test catalog-test pages-test
+          make -j2 PS5_PAYLOAD_SDK="$RUNNER_TEMP/elf2jb-sdk" all test runtime-test browser-test catalog-test pages-test diagnostics-test
       - name: Prepare GitHub Pages
         id: pages
         continue-on-error: true

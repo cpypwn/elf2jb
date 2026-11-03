@@ -33,11 +33,10 @@ def build_pages(base_url: str, elf_path: Path, icon_path: Path, output: Path, ve
 <link rel="icon" href="payload-icon.png" type="image/png">
 <style>
 body{{font:17px/1.6 system-ui,sans-serif;max-width:48rem;margin:3rem auto;padding:0 1.2rem;color:#e6f3f2;background:#14262e}}
-header{{display:flex;align-items:center;gap:1rem}}img{{width:88px;height:88px}}h1{{margin:0}}a{{color:#64d7cc}}code{{overflow-wrap:anywhere}}.source{{padding:1rem;background:#0d1c23;border:1px solid #41616a;border-radius:.6rem}}.status{{color:#efdb9a}}
+header{{display:flex;align-items:center;gap:1rem}}img{{width:88px;height:88px}}h1{{margin:0}}a{{color:#64d7cc}}code{{overflow-wrap:anywhere}}.source{{padding:1rem;background:#0d1c23;border:1px solid #41616a;border-radius:.6rem}}
 </style>
 <header><img src="payload-icon.png" alt="mac2jb app icon"><div><h1>elf2jb by cpypwn</h1><p>Version {release}</p></div></header>
 <p>Host the ns2jb Switch 2 connection from a jailbroken PS5.</p>
-<p class="status">Experimental release. Startup, browser opening and a Switch 2 connection were confirmed on PS5 Pro firmware 13.60. A run stopped at step 2/4; end-to-end execution remains unverified.</p>
 <h2>Add to Payload Manager</h2>
 <ol>
 <li>Open <strong>Settings → Manage Sources → Add Source</strong> in Payload Manager.</li>
@@ -47,8 +46,8 @@ header{{display:flex;align-items:center;gap:1rem}}img{{width:88px;height:88px}}h
 <p>Install <strong>elf2jb Host</strong> from this source to show the mac2jb icon in Payload Manager. Manually uploaded local or USB copies use Payload Manager’s generated icon.</p>
 <p>Keep the same source URL and refresh the repository to discover published updates. Each catalog entry includes the ELF’s SHA-256 checksum.</p>
 <h2>Use on PS5</h2>
-<p>Load <code>elf2jb-host.elf</code>. Once its page is serving on port 8088, it sends an embedded browser helper to the existing local ELF loader on port 9021. The helper requests the PS5 browser at the host page; it does not install a shortcut. Browser-launch failures leave the host running.</p>
-<p>After failure, restart the Switch 2 and reopen SmileBASIC, then use <strong>Restart host</strong> on the host page. A fresh pairing attempt starts in the same ELF and previous reports are kept.</p>
+<p>Load <code>elf2jb-host.elf</code>. Once its page is serving on port 8088, it sends an embedded browser helper to the existing local ELF loader on port 9021. Browser-launch failures leave the host running.</p>
+<p>After 4/4 verification, the host keeps RPC open until you select <strong>Finish session</strong> or the console disconnects. After a failure, restart the Switch 2 and reopen SmileBASIC, then use <strong>Restart host</strong> on the host page. A fresh pairing attempt starts in the same ELF and previous reports are kept.</p>
 <p>No temporary computer server is needed once this site is published.</p>
 <p><a href="{binary}">Download the ELF directly</a> · <a href="https://github.com/cpypwn/elf2jb/blob/main/README.md">Setup instructions</a> · <a href="https://github.com/cpypwn/elf2jb">Source code</a></p>
 </html>

@@ -276,7 +276,7 @@ test('firmware dumps use a dedicated directory and clear only marked prior dumps
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.ns2jb-firmware-dump.json'))).kind,
     'ns2jb-system-code-dump');
   fs.rmSync(root, {recursive: true});
-  fs.symlinkSync(base, root);
+  fs.symlinkSync(base, root, process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(prepareDumpDirectory(root), /symlink/);
 });
 
@@ -290,6 +290,7 @@ test('the engine has only local or Node dependencies, all present in the package
     }
   }
   walk('engine');
+  walk('pico');
   const present = new Set(files), generated = new Set(['engine/connection.json', 'engine/switch2/app/mounts.json']);
   assert.ok(!files.some(name => name.includes('switch1')));
   for (const name of files.filter(name => name.endsWith('.cjs'))) {
@@ -298,7 +299,7 @@ test('the engine has only local or Node dependencies, all present in the package
       if (!dependency.startsWith('.')) {
         assert.ok(dependency.startsWith('node:'), name + ': external dependency ' + dependency);
       } else {
-        const relative = path.relative(root, path.resolve(root, path.dirname(name), dependency));
+        const relative = path.relative(root, path.resolve(root, path.dirname(name), dependency)).split(path.sep).join('/');
         assert.ok(present.has(relative) || generated.has(relative), name + ': missing ' + relative);
       }
     }

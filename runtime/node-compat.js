@@ -68,17 +68,37 @@ class Buffer extends Uint8Array {
   includes(value,start,encoding){return this.indexOf(value,start,encoding)>=0;}
   _view(){return new DataView(this.buffer,this.byteOffset,this.byteLength);}
   readUInt16LE(at=0){return this._view().getUint16(at,true);}
+  readUInt16BE(at=0){return this._view().getUint16(at,false);}
   readUInt32LE(at=0){return this._view().getUint32(at,true);}
+  readUInt32BE(at=0){return this._view().getUint32(at,false);}
+  readInt16LE(at=0){return this._view().getInt16(at,true);}
   readInt32LE(at=0){return this._view().getInt32(at,true);}
+  readFloatLE(at=0){return this._view().getFloat32(at,true);}
   readBigUInt64LE(at=0){return this._view().getBigUint64(at,true);}
   readBigInt64LE(at=0){return this._view().getBigInt64(at,true);}
   writeUInt16LE(n,at=0){if(n<0||n>65535)throw RangeError('uint16');this._view().setUint16(at,n,true);return at+2;}
+  writeUInt16BE(n,at=0){if(n<0||n>65535)throw RangeError('uint16');this._view().setUint16(at,n,false);return at+2;}
   writeUInt32LE(n,at=0){if(n<0||n>0xffffffff)throw RangeError('uint32');this._view().setUint32(at,n,true);return at+4;}
+  writeUInt32BE(n,at=0){if(n<0||n>0xffffffff)throw RangeError('uint32');this._view().setUint32(at,n,false);return at+4;}
+  writeFloatLE(n,at=0){this._view().setFloat32(at,n,true);return at+4;}
+  writeInt16LE(n,at=0){if(n< -0x8000||n>0x7fff)throw RangeError('int16');this._view().setInt16(at,n,true);return at+2;}
   writeInt32LE(n,at=0){if(n< -0x80000000||n>0x7fffffff)throw RangeError('int32');this._view().setInt32(at,n,true);return at+4;}
   writeBigUInt64LE(n,at=0){if(n<0n||n>0xffffffffffffffffn)throw RangeError('uint64');this._view().setBigUint64(at,n,true);return at+8;}
   writeBigInt64LE(n,at=0){if(n<-(1n<<63n)||n>=(1n<<63n))throw RangeError('int64');this._view().setBigInt64(at,n,true);return at+8;}
 }
 globalThis.Buffer=Buffer;
+globalThis.TextDecoder=class TextDecoder {
+  constructor(label='utf-8',options={}) {
+    if(!/^utf-?8$/i.test(label))throw RangeError('Unsupported text encoding '+label);
+    this.encoding='utf-8';this.fatal=!!options.fatal;this.ignoreBOM=!!options.ignoreBOM;
+  }
+  decode(input=Buffer.alloc(0),options={}) {
+    if(options.stream)throw Error('Streaming text decoding is unsupported');
+    const bytes=Buffer.from(input),value=decode(bytes);
+    if(this.fatal&&!Buffer.from(value).equals(bytes))throw TypeError('Invalid UTF-8');
+    return !this.ignoreBOM&&value.startsWith('\ufeff')?value.slice(1):value;
+  }
+};
 class EventEmitter {
   constructor(){this._events=new Map();}
   on(event,fn){const list=this._events.get(event)||[];list.push(fn);this._events.set(event,list);return this;}

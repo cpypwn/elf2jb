@@ -10,9 +10,7 @@ const executionFile = path.join(directory, 'current-execution.json');
 const read = file => fs.readFile(file, 'utf8').then(JSON.parse);
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 async function save(file, value) {
-  const temporary = file + '.' + process.pid + '.tmp';
-  await fs.writeFile(temporary, JSON.stringify(value, null, 2) + '\n', {mode: 0o600});
-  await fs.rename(temporary, file);
+  await require('../../lib/atomic-write.cjs').writeFileAtomic(file, JSON.stringify(value, null, 2) + '\n');
 }
 const local = (session, suffix) => path.join(directory, session + suffix);
 

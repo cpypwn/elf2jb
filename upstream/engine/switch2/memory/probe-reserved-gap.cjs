@@ -9,6 +9,7 @@ const {RunControl, StopRequested, reportWriter} = require("./run-control.cjs");
 const {packPages} = require("./session-tools.cjs");
 const {paths, pathPacket, pathPackets} = require("./paths.cjs");
 const normalizedPath = require("./normalized-path.cjs");
+const {qualifyOverlap} = require("./wave-overlap.cjs");
 const {packet, response} = require("../../shared/ipc.cjs");
 const functions = require("../../shared/sdk-functions.json");
 
@@ -17,7 +18,14 @@ async function main() {
   const probeReadSize = 0x180000, markerOffset = 0x2340;
   const trialRange = 0x600000, cacheReadSize = 0x200000, fragmentCount = 16;
   const minimumCacheHeld = 0x2810, metadataAttempts = 4, fieldCopies = 2;
-  const waveAttempts = 30;
+  // Keep the upstream default; allow a bounded override.
+  const waveAttempts = Number(process.env.NS2_WAVE_ATTEMPTS ?? 30);
+  check(Number.isInteger(waveAttempts) && waveAttempts >= 1 && waveAttempts <= 200,
+    'NS2_WAVE_ATTEMPTS must be an integer between 1 and 200');
+  // Each reserved manager consumes 208 bytes.
+  const reservationObjects = Number(process.env.NS2_GAP_OBJECTS ?? 59);
+  check(Number.isInteger(reservationObjects) && reservationObjects >= 8 && reservationObjects <= 200,
+    'NS2_GAP_OBJECTS must be an integer between 8 and 200');
   const plannerCycle = 0x28000;
   const canonicalPlanner = require('./cache-address-plan.cjs');
   const addressPlanner = (target, size) => require('./signed-cache-plan.cjs').plan(target, size, plannerCycle);
@@ -51,7 +59,7 @@ async function main() {
   const tailInputs = Array.from({length: 4}, (_, i) => b + 0x32000 + i * 0x2000);
   const report = {session: live.session, scratch, canary, extent, markerOffset,
     probeReadSize, trialRange, cacheReadSize, fragmentCount, minimumCacheHeld,
-    metadataAttempts, fieldCopies, waveAttempts, plannerCycle,
+    metadataAttempts, fieldCopies, waveAttempts, reservationObjects, plannerCycle,
     started: new Date().toISOString(), cases: []};
   let saved, temporary, root, fileHandle, group, pinHandle, candidateHandle, originalRom, released = false;
   let cacheNeedsRestore = false, restoreCandidate;
@@ -101,9 +109,10 @@ async function main() {
     group.before = await memory();
     // The RPC batches still execute in order. Each request owns a separate
     // page because SendSyncRequest overwrites that page with its response.
-    const reservationPages = Buffer.alloc(59 * 4096);
+    const objects = reservationObjects;
+    const reservationPages = Buffer.alloc(objects * 4096);
     const managerPacket = domain.wire.domain(owner.root, 1200);
-    const addresses = Array.from({length: 59}, (_, i) => b + 0x60000 + i * 4096);
+    const addresses = Array.from({length: objects}, (_, i) => b + 0x60000 + i * 4096);
     addresses.forEach((_, i) => managerPacket.copy(reservationPages, i * 4096));
     await s.write(b + 0x60000, reservationPages);
     for (let first = 0; first < addresses.length; first += 32) {
@@ -124,7 +133,7 @@ async function main() {
     const allocated = group.before[5] - group.held[5];
     (report.reservationChecks ||= []).push({before: group.before[5], held: group.held[5], allocated});
     await save();
-    if (allocated !== 59 * 208)
+    if (allocated !== objects * 208)
       throw Object.assign(Error('Unexpected manager allocation size: ' + allocated), {reservationAccounting: true});
     const converted = await domain.send(s, 'Wrap gap group', owner.handle, domain.wire.control(0));
     check(!converted.result, 'Group wrapping failed');
@@ -173,7 +182,7 @@ async function main() {
     check(([native.restartAll, native.joinAll, affinity.pinAll].every(fn => typeof fn === 'function')),
       'Current helpers lack batching; bind current helpers or use --serial-host');
     await fs.copyFile(__filename, path.join(__dirname, label + '-source.cjs'));
-    for (const helper of ['cache-address-plan.cjs', 'fs-memory-control.cjs', 'session-tools.cjs', 'run-control.cjs', 'capture-workers.cjs', 'native-links.cjs'])
+    for (const helper of ['cache-address-plan.cjs', 'fs-memory-control.cjs', 'session-tools.cjs', 'run-control.cjs', 'capture-workers.cjs', 'native-links.cjs', 'wave-overlap.cjs'])
       await fs.copyFile(path.join(__dirname, helper), path.join(__dirname, label + '-' + helper));
     for (const helper of ['native-worker.cjs', 'affinity.cjs'])
       await fs.copyFile(path.join(directory, helper), path.join(__dirname, label + '-' + helper));
@@ -188,8 +197,9 @@ async function main() {
     await events.verify(s);
     const frequency = await timing.verify(s), mask = await affinity.available(s);
     const cores = Array.from({length: 32}, (_, i) => 1n << BigInt(i)).filter(bit => bit & mask);
+    report.mountPlan = {save: 'save', temporary: 'save'};
     saved = await mounted.cloneMountedFilesystem(s, 'save');
-    temporary = await mounted.cloneMountedFilesystem(s, 'tmp');
+    temporary = await mounted.cloneMountedFilesystem(s, 'save');
     root = await s.openService('fsp-srv');
     check(!(await s.ipc('Initialize gap root', root, 1, u64(0), {pid: true})).result, 'Root initialization failed');
     {
@@ -198,24 +208,15 @@ async function main() {
       originalRom = copied.handle;
       report.originalRom = copied.source;
     }
-    for (const [name, handle, bytes] of [['save', saved, writeSize + 0x400000], ['tmp', temporary, 0x10000]]) {
-      const space = await normal(handle, 11, '/');
-      const free = space.result ? 0n : space.data.readBigUInt64LE();
-      (report.freeSpace ||= {})[name] = {result: space.result, bytes: free.toString(), required: bytes};
-      if (name === 'tmp' && !space.result && free < BigInt(bytes)) {
-        // A low-space result does not establish that our own scratch remains.
-        // Inventory the root read-only before deciding what, if anything, is safe to remove.
-        try { report.tmpRootEntries = await require(path.join(directory, 'filesystem.cjs')).listDirectory(s, handle, '/'); }
-        catch (error) { report.tmpRootReadError = error.message; }
-        await save();
-      }
-      check(!space.result && (name === 'tmp' ? free >= BigInt(bytes) : free > BigInt(bytes)),
-        'Insufficient ' + name + ' space');
-      check((await normal(handle, 7, scratch)).canonicalResult === 0x202, 'Scratch already exists');
-      check(!(await normal(handle, 2, scratch)).result, 'Scratch creation failed');
-      created.push({name, handle, path: scratch});
-      await save();
-    }
+    const requiredSaveSpace = writeSize + 0x400000 + 0x10000;
+    const space = await normal(saved, 11, '/');
+    const free = space.result ? 0n : space.data.readBigUInt64LE();
+    report.freeSpace = {save: {result: space.result, bytes: free.toString(), required: requiredSaveSpace}};
+    check(!space.result && free > BigInt(requiredSaveSpace), 'Insufficient save space');
+    check((await normal(saved, 7, scratch)).canonicalResult === 0x202, 'Scratch already exists');
+    check(!(await normal(saved, 2, scratch)).result, 'Scratch creation failed');
+    created.push({name: 'save', handle: saved, path: scratch});
+    await save();
     const filename = scratch + '/commit_data';
     check(!(await normal(saved, 0, filename, Buffer.concat([u64(0), u64(writeSize)]))).result, 'Commit file creation failed');
     const parts = canary.slice(1).split('/');
@@ -442,6 +443,7 @@ async function main() {
       const heldPaths = rows.filter(row => ['canary', 'filler0', 'filler1', 'guard0', 'guard1'].includes(row.role));
       const beforeRelease = rows.find(row => row.role === 'preRelease');
       const canaryRow = rows.find(row => row.role === 'canary');
+      const overlap = qualifyOverlap(rows);
       const guardBytes = await s.readOwned(completedFlag, 32);
       const nativeGuard = {completed: guardBytes.readUInt32LE(completedDecision - completedFlag),
         earlyHole: guardBytes.readUInt32LE(holeDecision - completedFlag),
@@ -452,8 +454,7 @@ async function main() {
         preReleaseUsed: group.held[5] - beforeRelease.memory[5],
         restored: after[5] + (createPin ? 13616 : 0) === group.before[5], baseline: group.before[5], after: after[5],
         newPersistentBytes: createPin ? group.before[5] - after[5] : 0,
-        allPending: [...heldPaths, ...rows.filter(r => r.role.startsWith('tail') || r.role === 'commit')].every(
-          r => r.startUs < trigger.startUs && trigger.endUs < r.endUs),
+        allPending: overlap.qualified, pendingMode: overlap.mode,
         selectedMarker: trigger.result === 0 && Buffer.from(trigger.inline, 'hex').readUInt32LE() === 1,
         changedPaths: heldPaths.filter(r => r.result !== (r.role === 'canary' ? 0 : 0x202) ||
           r.role === 'canary' && Buffer.from(r.inline, 'hex').readUInt32LE() !== 1).map(r => r.role),

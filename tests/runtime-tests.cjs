@@ -24,6 +24,27 @@ test('runtime: byte offsets, 64-bit signed data, UTF-8 and base64',()=>{
   const unicode='SmileBASIC 日本語 🎮';assert.equal(Buffer.from(unicode).toString(),unicode);
   assert.deepEqual(Buffer.alloc(8).fill(Buffer.from('abcd','hex')),Buffer.from('abcdabcdabcdabcd','hex'));
 });
+test('runtime: GPU app binary field encodings',()=>{
+  const value=Buffer.alloc(16);
+  value.writeUInt16BE(0x1234,0);
+  value.writeUInt32BE(0x89abcdef,2);
+  value.writeInt16LE(-321,6);
+  value.writeFloatLE(1.5,8);
+  assert.equal(value.readUInt16BE(0),0x1234);
+  assert.equal(value.readUInt32BE(2),0x89abcdef);
+  assert.equal(value.readInt16LE(6),-321);
+  assert.equal(value.readFloatLE(8),1.5);
+});
+test('runtime: strict UTF-8 decoding for FS cache planning',()=>{
+  const {nulWrites}=require('../upstream/engine/switch2/memory/cache-address-plan.cjs');
+  const decoder=new TextDecoder('utf-8',{fatal:true});
+  assert.equal(decoder.decode(Buffer.from('cpypwn')),'cpypwn');
+  assert.throws(()=>decoder.decode(Buffer.from([0xff])),TypeError);
+  const steps=nulWrites(Buffer.from([0x41,0]));
+  assert.equal(steps.length,1);
+  assert.equal(steps[0].bytes.toString(),'A');
+  assert.throws(()=>nulWrites(Buffer.from([0xff,0])),TypeError);
+});
 test('runtime: positioned file IO, stat, sync and recursive copy',async t=>{
   const root=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'elf2jb-io-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -67,6 +88,18 @@ test('runtime: promisified execFile supports mount-inspection stages',async t=>{
   assert.equal(result.stdout,'stage output\n');assert.equal(result.stderr,'stage diagnostic\n');
   fs.writeFileSync(file,"process.exitCode=7;");
   await assert.rejects(exec(process.execPath,[file],{timeout:2000}),/exit code 7/);
+});
+test('runtime: stage 2 diagnostics read a bounded acquisition tail',async t=>{
+  const {inspectFailure}=require('../runtime/run-diagnostics.cjs');
+  const root=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'elf2jb-stage-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const run=path.join(root,'switch2-test');fs.mkdirSync(path.join(run,'switch2/memory'),{recursive:true});
+  fs.writeFileSync(path.join(run,'switch2/pipeline.json'),JSON.stringify({stages:[{
+    name:'FS read, write and restoration',status:'failed',error:'Error: stage failed'}]}));
+  fs.writeFileSync(path.join(run,'switch2/acquisition.log'),'x'.repeat(20000)+'\nError: probe failed\n');
+  const result=await inspectFailure(Error('The run stopped\nDetails: '+run),root);
+  assert.equal(result.stage,'FS read, write and restoration');
+  assert.match(result.acquisitionTail,/probe failed/);
 });
 test('browser: loader receives the exact helper once and fresh reports update status',async t=>{
   const {launchBrowser}=require('../runtime/browser-launch.cjs');

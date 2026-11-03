@@ -4,7 +4,7 @@ import hashlib
 
 root = Path(__file__).resolve().parents[1]
 out = root / "build/assets.c"
-files = sorted((str(p.relative_to(root)),p) for name in ("upstream", "runtime", "assets") for p in (root / name).rglob("*") if p.is_file())
+files = sorted((str(p.relative_to(root)),p) for name in ("upstream", "runtime", "assets", "homebrew") for p in (root / name).rglob("*") if p.is_file())
 files.append(('runtime/open-browser.elf',root/'build/elf2jb-open-browser.elf'))
 digest = hashlib.sha256()
 for name,p in files:

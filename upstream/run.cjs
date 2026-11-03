@@ -11,6 +11,8 @@ const {listen} = require('./engine/lib/connection.cjs');
 const {NativeClient} = require('./engine/lib/native.cjs');
 const {qualify} = require('./engine/lib/qualify.cjs');
 const {serve} = require('./engine/lib/bridge.cjs');
+const picoKeyboard = require('./pico/host.cjs');
+const picoKeyFile = path.resolve(process.env.NS2_PICO_KEY_FILE || path.join(__dirname, 'pico/secret'));
 
 const port = 39380;
 const save = (file, value) => fs.writeFile(file, JSON.stringify(value, null, 2) + '\n', {mode: 0o600});
@@ -166,13 +168,14 @@ function waitForRpcStop(connection, signals = process, engineFinished = null) {
 
 async function main(args = process.argv.slice(2)) {
   if (args.length === 1 && args[0] === '--help') {
-    console.log('Usage: node run.cjs [--rpc] [--dump-firmware] [computer-IP]\n' +
+    console.log('Usage: node run.cjs [--rpc] [--dump-firmware] [--pico] [computer-IP]\n' +
       'Switch 2 only. No npm install required. See README.md for the BASIC setup.');
     return;
   }
+  const picoMode = args.includes('--pico') || !!process.env.NS2_PICO_KEY_FILE;
   const rpcMode = args.includes('--rpc') || process.env.NS2_RPC_MODE === '1';
   const dumpFirmware = args.includes('--dump-firmware');
-  const host = await chooseHost(args.filter(arg => arg !== '--rpc' && arg !== '--dump-firmware'));
+  const host = await chooseHost(args.filter(arg => arg !== '--rpc' && arg !== '--dump-firmware' && arg !== '--pico'));
   const basicArgs = Number(process.env.NS2_BASIC_ARITY || 5);
   const command = connectCommand(host, basicArgs);
   const workspace = path.join(__dirname, 'runs');
@@ -190,8 +193,14 @@ async function main(args = process.argv.slice(2)) {
   const directory = await fs.mkdtemp(path.join(workspace, 'switch2-'));
   await fs.writeFile(path.join(directory, 'connect.txt'), command + '\n', {mode: 0o600});
   const result = {platform: 2, sourceSha256: await sourceDigest(), started: new Date().toISOString(), verified: false};
-  let native, bridge, engine, failure;
+  let native, bridge, engine, keyboard, failure;
   try {
+    if (picoMode) {
+      const key = (await fs.readFile(picoKeyFile, 'utf8').catch(() => '')).trim();
+      if (!/^[0-9a-f]{32}$/.test(key))
+        throw Error('Pico pairing key missing or invalid: ' + picoKeyFile);
+      keyboard = await picoKeyboard.start({host, command, key, onStatus: console.log});
+    }
     const connected = await listen({host, port, onWaiting() {
       console.log(`Waiting for Switch 2 at ${host}:${port}.`);
       console.log('In a freshly opened SmileBASIC, load the saved bootstrap and enter:');
@@ -211,7 +220,8 @@ async function main(args = process.argv.slice(2)) {
     bridge.keepAwake(result.bootstrap.activity);
     await save(path.join(directory, 'connection.json'), {port: bridge.port,
       addresses: {...connected.addresses, session: path.basename(directory), target: 'switch2'}});
-    for (const name of ['shared', 'switch2'])
+    // Include shared libraries in the per-run copy.
+    for (const name of ['shared', 'switch2', 'lib'])
       await fs.cp(path.join(__dirname, 'engine', name), path.join(directory, name), {recursive: true});
     engine = await startEngine(directory, dumpDirectory, rpcMode);
     if (rpcMode) await engine.ready;
@@ -256,7 +266,8 @@ async function main(args = process.argv.slice(2)) {
       try {checkEngine(await engine.release());}
       catch (error) {(result.cleanupErrors ||= []).push({name: 'FS endpoint', error: error.message}); failure ||= error;}
     }
-    for (const [name, close] of [['bridge', () => bridge?.close()], ['connection', () => native?.stop()]]) {
+    for (const [name, close] of [['keyboard', () => keyboard?.close()],
+      ['bridge', () => bridge?.close()], ['connection', () => native?.stop()]]) {
       try {await close();}
       catch (error) {(result.cleanupErrors ||= []).push({name, error: error.message}); failure ||= error;}
     }

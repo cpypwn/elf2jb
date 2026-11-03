@@ -6,7 +6,7 @@ RUNTIME_FLAGS := -std=gnu11 -O2 -I$(QUICKJS) -Ivendor/sha256 -DCONFIG_VERSION=\"
 NATIVE_OBJECTS := $(patsubst %.c,build/native/%.o,$(RUNTIME_SOURCES))
 PS5_OBJECTS := $(patsubst %.c,build/ps5/%.o,$(RUNTIME_SOURCES))
 
-.PHONY: all native test clean runtime-native runtime-test browser-test shortcut-test catalog-test pages-test
+.PHONY: all native test clean runtime-native runtime-test browser-test shortcut-test catalog-test pages-test diagnostics-test
 all: build/elf2jb-preflight.elf build/elf2jb-host.elf
 
 build/elf2jb-open-browser.elf: src/open_browser.c | build
@@ -15,7 +15,7 @@ build/elf2jb-open-browser.elf: src/open_browser.c | build
 build/elf2jb-shortcut.elf: build/ps5/src/media_shortcut_main.o build/ps5/src/media_shortcut.o build/ps5/build/assets.o
 	$(PS5_PAYLOAD_SDK)/bin/prospero-clang -o $@ $^
 
-build/assets.c: scripts/embed.py $(shell find runtime upstream assets -type f) build/elf2jb-open-browser.elf | build
+build/assets.c: scripts/embed.py $(shell find runtime upstream assets homebrew -type f) build/elf2jb-open-browser.elf | build
 	python3 scripts/embed.py
 
 build/elf2jb-host.elf: $(PS5_OBJECTS)
@@ -37,6 +37,8 @@ runtime-native: build/elf2jb-host
 runtime-test: runtime-native
 	build/elf2jb-host $(CURDIR) $(CURDIR)/tests/runtime-tests.cjs
 	python3 tests/host_smoke.py
+	python3 tests/held_rpc_smoke.py
+	node --test tests/switch_gpu_homebrew.cjs
 
 build/browser-helper-native: src/open_browser.c tests/browser_api_stubs.c | build
 	$(HOST_CC) -std=gnu11 -D_GNU_SOURCE -DELF2JB_BROWSER_WAIT_MS=1000 -O2 -Wall -Wextra -Werror -o $@ $^
@@ -55,6 +57,9 @@ catalog-test:
 
 pages-test:
 	python3 tests/pages.py
+
+diagnostics-test:
+	node --test tests/diagnostics.test.cjs
 
 build/native/src/runtime.o build/native/src/media_shortcut.o build/ps5/src/runtime.o build/ps5/src/media_shortcut.o: src/media_shortcut.h
 

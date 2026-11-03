@@ -39,7 +39,8 @@ class PagesTests(unittest.TestCase):
             self.assertEqual((site / "source-url.txt").read_text(), "https://cpypwn.github.io/elf2jb/payloads.json\n")
             page = (site / "index.html").read_text()
             self.assertIn("https://cpypwn.github.io/elf2jb/payloads.json", page)
-            self.assertIn("end-to-end execution remains unverified", page)
+            self.assertNotIn("Experimental release", page)
+            self.assertIn("Finish session", page)
             self.assertTrue((site / ".nojekyll").is_file())
 
     def test_landing_page_escapes_configured_url_and_version(self):
